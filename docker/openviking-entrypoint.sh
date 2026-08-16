@@ -116,6 +116,13 @@ fi
 
 normalize_with_bot "${WITH_BOT}"
 ensure_config
+
+if [ -d "/app/dev_openviking" ]; then
+    echo "[openviking-entrypoint] installing dev openviking from /app/dev_openviking"
+    /app/.venv/bin/uv pip install -e /app/dev_openviking --force-reinstall --no-deps --quiet
+    echo "[openviking-entrypoint] dev openviking installed"
+fi
+
 resolve_server_port
 
 forward_signal() {
