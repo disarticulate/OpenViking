@@ -1,12 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Shared constants, helpers, dataclasses, and singleton management for VikingFS."""
+"""Shared constants, helpers, and singleton management for VikingFS."""
 
 import os
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
-from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     ResourceExhaustedError,
@@ -14,6 +12,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
+    from openviking.storage.acl import AclManager
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
@@ -138,31 +137,6 @@ _ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
 _DEFAULT_GREP_FILE_CONCURRENCY = 32
 
 
-# ========== Dataclass ==========
-
-
-@dataclass
-class RelationEntry:
-    """Relation table entry."""
-
-    id: str
-    uris: List[str]
-    reason: str = ""
-    created_at: str = field(default_factory=get_current_timestamp)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "uris": self.uris,
-            "reason": self.reason,
-            "created_at": self.created_at,
-        }
-
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> "RelationEntry":
-        return RelationEntry(**data)
-
-
 # ========== Singleton Pattern ==========
 
 _instance: Optional["Any"] = None
@@ -173,6 +147,7 @@ def init_viking_fs(
     query_embedder: Optional[Any] = None,
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
+    acl_manager: Optional["AclManager"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
     grep_config: Optional["GrepConfig"] = None,
     timeout: int = 10,
@@ -200,6 +175,7 @@ def init_viking_fs(
         query_embedder=query_embedder,
         rerank_config=rerank_config,
         vector_store=vector_store,
+        acl_manager=acl_manager,
         retrieval_config=retrieval_config,
         grep_config=grep_config,
         encryptor=encryptor,

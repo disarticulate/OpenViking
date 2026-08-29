@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.exceptions import ExceptionMiddleware
 
+from openviking.observability.http_error_context import capture_public_http_error
 from openviking.server.config import (
     ServerConfig,
     load_bot_gateway_token,
@@ -30,6 +31,7 @@ from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Respo
 from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
+    acl_router,
     admin_router,
     agent_evolution_router,
     bot_router,
@@ -42,7 +44,6 @@ from openviking.server.routers import (
     openviking_assets_router,
     pack_router,
     privacy_configs_router,
-    relations_router,
     resources_router,
     search_router,
     sessions_router,
@@ -144,7 +145,6 @@ async def _initialize_runtime_state(
     app.state.user_deletion_service = await setup_user_deletion(
         service=service,
         manager=app.state.api_key_manager,
-        shared_upload_prefix=config.temp_upload.shared_prefix,
         oauth_store=getattr(app.state, "oauth_store", None),
         usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
     )
@@ -272,6 +272,15 @@ def create_app(
         agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
         if callable(agent_evolution_setter):
             agent_evolution_setter(config.agent_evolution)
+
+        user_memory_policy_setter = getattr(
+            sessions,
+            "set_default_user_memory_policy",
+            None,
+        )
+        if callable(user_memory_policy_setter):
+            user_memory_policy_setter(config.user_config_defaults.memory_policy)
+
         agent_evolution_path_setter = getattr(
             sessions,
             "set_agent_evolution_config_path",
@@ -480,6 +489,7 @@ def create_app(
     @app.exception_handler(OpenVikingError)
     async def openviking_error_handler(request: Request, exc: OpenVikingError):
         http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
+        capture_public_http_error(code=exc.code, message=exc.message, details=exc.details)
         return JSONResponse(
             status_code=http_status,
             content=Response(
@@ -496,14 +506,21 @@ def create_app(
     async def request_validation_error_handler(request: Request, exc: RequestValidationError):
         errors = [_normalize_validation_error(error) for error in exc.errors()]
         code = "INVALID_ARGUMENT"
+        message = _validation_error_message(errors)
+        details = {"validation_errors": errors}
+        capture_public_http_error(
+            code=code,
+            message=message,
+            details=details,
+        )
         return JSONResponse(
             status_code=ERROR_CODE_TO_HTTP_STATUS[code],
             content=Response(
                 status="error",
                 error=ErrorInfo(
                     code=code,
-                    message=_validation_error_message(errors),
-                    details={"validation_errors": errors},
+                    message=message,
+                    details=details,
                 ),
             ).model_dump(exclude_none=True),
         )
@@ -517,6 +534,8 @@ def create_app(
         details = None
         if exc.status_code != response_status:
             details = {"original_http_status_code": exc.status_code}
+        message = _message_from_http_detail(exc.detail)
+        capture_public_http_error(code=code, message=message, details=details)
         return JSONResponse(
             status_code=response_status,
             headers=exc.headers,
@@ -524,7 +543,7 @@ def create_app(
                 status="error",
                 error=ErrorInfo(
                     code=code,
-                    message=_message_from_http_detail(exc.detail),
+                    message=message,
                     details=details,
                 ),
             ).model_dump(exclude_none=True),
@@ -589,6 +608,7 @@ def create_app(
 
     # Register routers
     app.include_router(system_router)
+    app.include_router(acl_router)
     app.include_router(admin_router)
     app.include_router(agent_evolution_router)
     app.include_router(resources_router)
@@ -596,7 +616,6 @@ def create_app(
     app.include_router(content_router)
     app.include_router(console_router)
     app.include_router(search_router)
-    app.include_router(relations_router)
     app.include_router(privacy_configs_router)
     app.include_router(skills_router)
     app.include_router(sessions_router)
@@ -779,7 +798,7 @@ def create_app(
     else:
         logger.info("Web Studio bundle not found at %s; skipping /studio mount", _studio_dir)
 
-    # MCP endpoint — serves 16 tools (find, search, recall, read, write, edit,
+    # MCP endpoint — serves 15 tools (find, search, read, write, edit,
     # list, tree, remember, add_resource, list_watches, cancel_watch, grep,
     # glob, forget, health) via streamable HTTP for MCP clients.
     from starlette.routing import Match, Route

@@ -10,6 +10,7 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
+from openviking.connector.delegate import ConnectorDelegate
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
     FeishuTokenRefreshError,
@@ -74,7 +75,6 @@ class WatchScheduler:
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
         self._lock = asyncio.Lock()
-        self._feishu_oauth_client: Optional[Any] = None
 
     @property
     def watch_manager(self) -> Optional[WatchManager]:
@@ -262,14 +262,16 @@ class WatchScheduler:
         Args:
             task: WatchTask to execute
         """
-        logger.info(f"[WatchScheduler] Executing task {task.task_id} for path {task.path}")
+        logger.info(f"[WatchScheduler] Executing task {task.task_id}")
 
         cancelled = False
         should_deactivate = False
         deactivation_reason = ""
 
         try:
-            if not self._check_resource_exists(task.path):
+            auth_state = getattr(task, "auth_state", None)
+            connector_watch = ConnectorDelegate.is_watch_auth_state(auth_state)
+            if not connector_watch and not self._check_resource_exists(task.path):
                 should_deactivate = True
                 deactivation_reason = f"Resource path does not exist: {task.path}"
                 logger.warning(
@@ -291,6 +293,7 @@ class WatchScheduler:
                 ctx = RequestContext(
                     user=user,
                     role=role,
+                    bypass_acl=True,
                 )
 
                 if task.to_uri:
@@ -307,7 +310,6 @@ class WatchScheduler:
                     processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
                     processor_kwargs.pop("build_index", None)
                     processor_kwargs.pop("summarize", None)
-                    auth_state = getattr(task, "auth_state", None)
                     if is_feishu_auth_state(auth_state):
                         try:
                             auth_state = await self._prepare_feishu_auth_state(task, auth_state)
@@ -327,6 +329,19 @@ class WatchScheduler:
                             auth_state,
                             task.path,
                         )
+                    elif connector_watch:
+                        (
+                            api_key,
+                            add_type,
+                            connector_args,
+                        ) = await self._resource_service._connector.restore_watch_request(
+                            auth_state,
+                            account_id=task.account_id,
+                            path=task.path,
+                        )
+                        ctx.api_key = api_key
+                        processor_kwargs["add_type"] = add_type
+                        processor_kwargs["args"] = connector_args
 
                 if not should_deactivate:
                     result = await self._resource_service.refresh_resource(
@@ -345,10 +360,16 @@ class WatchScheduler:
                         **processor_kwargs,
                     )
 
-                    logger.info(
-                        f"[WatchScheduler] Task {task.task_id} executed successfully, "
-                        f"result: {result.get('root_uri', 'N/A')}"
-                    )
+                    if result.get("status") == "failed":
+                        logger.warning(
+                            f"[WatchScheduler] Task {task.task_id} execution finished with "
+                            "a failed ingestion task"
+                        )
+                    else:
+                        logger.info(
+                            f"[WatchScheduler] Task {task.task_id} executed successfully, "
+                            f"result: {result.get('root_uri', 'N/A')}"
+                        )
 
         except asyncio.CancelledError:
             cancelled = True
@@ -361,8 +382,8 @@ class WatchScheduler:
             )
         except Exception as e:
             logger.error(
-                f"[WatchScheduler] Task {task.task_id} execution failed: {e}",
-                exc_info=True,
+                f"[WatchScheduler] Task {task.task_id} execution failed, "
+                f"error_type={type(e).__name__}"
             )
 
         finally:
@@ -414,16 +435,13 @@ class WatchScheduler:
             return auth_state
 
         refresh_token = auth_state.get("refresh_token")
-        refreshed = await self._get_feishu_oauth_client().refresh_user_access_token(refresh_token)
+        refreshed = await FeishuOAuthClient.from_auth_state(auth_state).refresh_user_access_token(
+            refresh_token
+        )
         updated = apply_feishu_refreshed_token(auth_state, refreshed)
         if self._watch_manager is not None:
             await self._watch_manager.update_auth_state(task.task_id, updated)
         return updated
-
-    def _get_feishu_oauth_client(self):
-        if self._feishu_oauth_client is None:
-            self._feishu_oauth_client = FeishuOAuthClient.from_config()
-        return self._feishu_oauth_client
 
     def _check_resource_exists(self, path: str) -> bool:
         """Check if a resource path exists.

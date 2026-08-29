@@ -289,6 +289,33 @@ enum AttrsCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum AclCommands {
+    Get {
+        uri: String,
+    },
+    Set {
+        uri: String,
+        #[arg(long = "entry", required = true)]
+        entries: Vec<String>,
+    },
+    Grant {
+        uri: String,
+        #[arg(long)]
+        principal: String,
+        #[arg(long)]
+        level: String,
+    },
+    Revoke {
+        uri: String,
+        #[arg(long)]
+        principal: String,
+    },
+    Rm {
+        uri: String,
+    },
+}
+
 // Commands are organized with category tags in their doc comments.
 //
 // # Command Tagging System
@@ -593,6 +620,11 @@ enum Commands {
         #[command(subcommand)]
         action: AttrsCommands,
     },
+    /// [Data] Manage resource ACL
+    Acl {
+        #[command(subcommand)]
+        action: AclCommands,
+    },
     /// [Data] Read file content (Level 2)
     Read {
         /// Viking URI
@@ -752,6 +784,9 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        /// Include the full visible content for every matched URI
+        #[arg(long, help_heading = "Advanced options")]
+        read_content: bool,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -821,6 +856,9 @@ enum Commands {
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
+        /// Include the full visible content for every matched URI
+        #[arg(long, help_heading = "Advanced options")]
+        read_content: bool,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -911,38 +949,6 @@ enum Commands {
     Privacy {
         #[command(subcommand)]
         action: PrivacyCommands,
-    },
-    /// [Experimental][Data] List relations of a resource
-    Relations {
-        /// Viking URI
-        #[arg(value_name = "uri")]
-        uri: String,
-    },
-    /// [Experimental][Data] Create relation links from one URI to one or more targets
-    Link {
-        /// Source URI
-        #[arg(value_name = "from-uri")]
-        from_uri: String,
-        /// One or more target URIs
-        #[arg(value_name = "to-uri")]
-        to_uris: Vec<String>,
-        /// Reason for linking
-        #[arg(
-            long,
-            default_value = "",
-            value_name = "text",
-            help_heading = "Common options"
-        )]
-        reason: String,
-    },
-    /// [Experimental][Data] Remove a relation link
-    Unlink {
-        /// Source URI
-        #[arg(value_name = "from-uri")]
-        from_uri: String,
-        /// Target URI to unlink
-        #[arg(value_name = "to-uri")]
-        to_uri: String,
     },
     /// [Data] Export context as .ovpack
     Export {
@@ -1052,7 +1058,7 @@ enum Commands {
     },
     /// [Interactive] Compile source materials with a VikingBot Skill
     Compile {
-        /// Source directory; repeat the flag or separate directories with commas
+        /// Source file or directory; repeat the flag or separate entries with commas
         #[arg(
             long = "from",
             required = true,
@@ -1187,6 +1193,15 @@ enum Commands {
             help_heading = "Common options"
         )]
         tag_mode: String,
+        /// Recursively reindex subdirectories (only affects semantic_and_vectors)
+        #[arg(
+            long,
+            default_value_t = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Common options"
+        )]
+        recursive: bool,
     },
 }
 
@@ -1225,13 +1240,13 @@ fn legacy_upload_option_error(
 enum TaskCommands {
     /// Show status of a specific task
     Status {
-        /// Task ID returned by add-resource/add-skill
+        /// Task ID returned by an asynchronous command, including compile
         #[arg(value_name = "task-id")]
         task_id: String,
     },
     /// Cancel a task
     Cancel {
-        /// Task ID returned by add-resource/add-skill
+        /// Task ID returned by an asynchronous command, including compile
         #[arg(value_name = "task-id")]
         task_id: String,
     },
@@ -1849,7 +1864,17 @@ enum AdminCommands {
         user_config_json: Option<String>,
     },
     /// List all accounts (ROOT only)
-    ListAccounts,
+    ListAccounts {
+        /// Filter accounts by ID (supports wildcard * and ?)
+        #[arg(long, value_name = "pattern")]
+        name: Option<String>,
+        /// Page size; omit to list all accounts
+        #[arg(long, value_name = "n")]
+        limit: Option<u32>,
+        /// 1-based page number (requires --limit)
+        #[arg(long, default_value = "1", value_name = "n")]
+        page: u32,
+    },
     /// Delete an account and all associated users (ROOT only)
     DeleteAccount {
         /// Account ID to delete
@@ -1885,15 +1910,62 @@ enum AdminCommands {
         /// Account ID
         #[arg(value_name = "account-id")]
         account_id: String,
-        /// Maximum number of users to list (default: 100)
-        #[arg(long, default_value = "100", value_name = "n")]
-        limit: u32,
+        /// Page size; omit to list all users
+        #[arg(long, value_name = "n")]
+        limit: Option<u32>,
         /// Filter users by name (supports wildcard * and ?)
         #[arg(long, value_name = "pattern")]
         name: Option<String>,
         /// Filter users by role
         #[arg(long, value_name = "role")]
         role: Option<String>,
+        /// 1-based page number (requires --limit)
+        #[arg(long, default_value = "1", value_name = "n")]
+        page: u32,
+    },
+    /// Create an empty account-scoped group
+    CreateGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
+    /// List groups in an account
+    ListGroups {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+    },
+    /// List the users in a group
+    ListGroupMembers {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
+    /// Add an existing account user to a group
+    AddGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Remove a user from a group
+    RemoveGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Delete an empty group
+    DeleteGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
     },
     /// Remove a user from an account
     RemoveUser {
@@ -1927,6 +1999,20 @@ enum AdminCommands {
         /// Deterministic API key seed
         #[arg(long, value_name = "seed")]
         seed: Option<String>,
+    },
+    /// Update allowlisted settings for an account
+    SetAccountSettings {
+        /// Account ID
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        /// Automatically protect newly created shared content
+        #[arg(
+            long,
+            required = true,
+            action = ArgAction::Set,
+            value_name = "true|false"
+        )]
+        auto_protect_new_content: bool,
     },
 }
 
@@ -2481,9 +2567,6 @@ fn is_top_level_server_command(command: &str) -> bool {
             | "grep"
             | "glob"
             | "add-memory"
-            | "relations"
-            | "link"
-            | "unlink"
             | "export"
             | "backup"
             | "import"
@@ -2520,9 +2603,16 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "migrate"
             | "register-user"
             | "list-users"
+            | "create-group"
+            | "list-groups"
+            | "list-group-members"
+            | "add-group-member"
+            | "remove-group-member"
+            | "delete-group"
             | "remove-user"
             | "set-role"
             | "regenerate-key"
+            | "set-account-settings"
     )
 }
 
@@ -3263,15 +3353,6 @@ async fn main() {
                     .await
             }
         },
-        Commands::Relations { uri } => handlers::handle_relations(uri, ctx).await,
-        Commands::Link {
-            from_uri,
-            to_uris,
-            reason,
-        } => handlers::handle_link(from_uri, to_uris, reason, ctx).await,
-        Commands::Unlink { from_uri, to_uri } => {
-            handlers::handle_unlink(from_uri, to_uri, ctx).await
-        }
         Commands::Export {
             uri,
             to,
@@ -3415,6 +3496,7 @@ async fn main() {
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         },
+        Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
@@ -3545,7 +3627,10 @@ async fn main() {
             dry_run,
             tags,
             tag_mode,
-        } => handlers::handle_reindex(uri, mode, wait, dry_run, tags, tag_mode, ctx).await,
+            recursive,
+        } => {
+            handlers::handle_reindex(uri, mode, wait, dry_run, tags, tag_mode, recursive, ctx).await
+        }
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -3558,6 +3643,7 @@ async fn main() {
             level,
             context_type,
             tags,
+            read_content,
         } => {
             handlers::handle_find(
                 query,
@@ -3570,6 +3656,7 @@ async fn main() {
                 level,
                 context_type,
                 tags,
+                read_content,
                 ctx,
             )
             .await
@@ -3586,6 +3673,7 @@ async fn main() {
             level,
             context_type,
             tags,
+            read_content,
         } => {
             handlers::handle_search(
                 query,
@@ -3599,6 +3687,7 @@ async fn main() {
                 level,
                 context_type,
                 tags,
+                read_content,
                 ctx,
             )
             .await
@@ -4106,9 +4195,6 @@ mod tests {
             "grep",
             "glob",
             "add-memory",
-            "relations",
-            "link",
-            "unlink",
             "export",
             "backup",
             "import",
@@ -4149,9 +4235,16 @@ mod tests {
             &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
+            &["ov", "admin", "create-group"],
+            &["ov", "admin", "list-groups"],
+            &["ov", "admin", "list-group-members"],
+            &["ov", "admin", "add-group-member"],
+            &["ov", "admin", "remove-group-member"],
+            &["ov", "admin", "delete-group"],
             &["ov", "admin", "remove-user"],
             &["ov", "admin", "set-role"],
             &["ov", "admin", "regenerate-key"],
+            &["ov", "admin", "set-account-settings"],
             &["ov", "system", "wait"],
             &["ov", "system", "status"],
             &["ov", "system", "health"],
@@ -5402,13 +5495,20 @@ mod tests {
             "team=search",
             "--tag-mode",
             "append",
+            "--recursive=false",
         ]);
 
         let cli = result.expect("reindex command should parse");
         match cli.command {
-            Commands::Reindex { tags, tag_mode, .. } => {
+            Commands::Reindex {
+                tags,
+                tag_mode,
+                recursive,
+                ..
+            } => {
                 assert_eq!(tags, vec!["team=search"]);
                 assert_eq!(tag_mode, "append");
+                assert!(!recursive);
             }
             _ => panic!("expected reindex command"),
         }

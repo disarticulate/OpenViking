@@ -21,24 +21,45 @@ const HARNESS_SHARED_FILES = [
   "profile-inject.mjs",
   "uri-guard.mjs",
 ];
-const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "async-writer.mjs", "batch-send.mjs"];
+const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "mcp-proxy-config.mjs", "async-writer.mjs", "batch-send.mjs"];
+const DOCTOR_SHARED_FILES = [...OPENCODE_SHARED_FILES, "doctor-core.mjs"];
+const ZCODE_SHARED_FILES = [...OPENCODE_SHARED_FILES, "agent-hook-runtime.mjs", "agent-uri-guard.mjs"];
+const DSH_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "mcp-proxy-config.mjs"];
 const AGENT_PLUGINS_SHARED_FILES = [
   "credentials.mjs",
   "debug-log.mjs",
   "mcp-proxy-core.mjs",
+  "mcp-proxy-config.mjs",
   "workspace-peer.mjs",
 ];
 const TARGETS = [
-  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
-  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
+  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
+  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
   { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
-  { dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"), files: HARNESS_SHARED_FILES },
+  { dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"), files: DSH_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
-  { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") },
+  { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") , files: ZCODE_SHARED_FILES },
   { dir: join(ROOT, "agent-plugins", "servers", "shared"), files: AGENT_PLUGINS_SHARED_FILES },
 ];
 
 const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
+
+// Skills are copied verbatim — a generated-from banner ahead of the `---`
+// frontmatter would break every skill loader.
+const SKILLS_DIR = join(ROOT, "examples", "skills");
+const SKILL_TARGETS = [
+  {
+    // Not shipped to openclaw-plugin: its REST tool surface has its own
+    // operator skill (openviking-context-database) with different tool names.
+    skill: "openviking-memory",
+    dirs: [
+      join(ROOT, "examples", "codex-memory-plugin", "skills"),
+      join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
+      join(ROOT, "examples", "cursor-memory-plugin", "skills"),
+      join(ROOT, "examples", "dsh-memory-plugin", "skills"),
+    ],
+  },
+];
 
 async function listSharedFiles() {
   const files = await readdir(SHARED_DIR);
@@ -53,6 +74,15 @@ async function copySharedFile(file, targetDir) {
   await writeFile(target, `${GENERATED_HEADER}${body}`, "utf-8");
 }
 
+async function copySkill(skill, targetDir) {
+  const sourceDir = join(SKILLS_DIR, skill);
+  for (const file of (await readdir(sourceDir)).sort()) {
+    const target = join(targetDir, skill);
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, file), await readFile(join(sourceDir, file), "utf-8"), "utf-8");
+  }
+}
+
 async function main() {
   const allFiles = await listSharedFiles();
   for (const target of TARGETS) {
@@ -63,6 +93,12 @@ async function main() {
       }
       await copySharedFile(file, target.dir);
       process.stdout.write(`synced ${file} -> ${relative(ROOT, target.dir)}\n`);
+    }
+  }
+  for (const { skill, dirs } of SKILL_TARGETS) {
+    for (const dir of dirs) {
+      await copySkill(skill, dir);
+      process.stdout.write(`synced ${skill}/ -> ${relative(ROOT, dir)}\n`);
     }
   }
 }

@@ -11,16 +11,19 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
-from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.server.account_settings import (
+    effective_auto_protect_new_content,
+    read_account_settings,
+)
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
+from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
-from openviking.service.relation_service import RelationService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
@@ -28,6 +31,7 @@ from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
 from openviking.session import create_session_compressor
+from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
@@ -104,7 +108,6 @@ class OpenVikingService:
         self._fs_service = FSService(
             uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
-        self._relation_service = RelationService()
         self._pack_service = PackService()
         self._search_service = SearchService()
         self._resource_memory_link_service = ResourceMemoryLinkService()
@@ -182,6 +185,10 @@ class OpenVikingService:
         self._vikingdb_manager = VikingDBManager(
             vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
+        self._vikingdb_manager.acl_manager = AclManager(
+            self._vikingdb_manager,
+            auto_protect_new_content=self._auto_protect_new_content,
+        )
 
         # Configure queues if QueueManager is available.
         # Workers are NOT started here — start() is called after VikingFS is initialized
@@ -196,6 +203,12 @@ class OpenVikingService:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
         return binding_config
+
+    async def _auto_protect_new_content(self, account_id: str) -> bool:
+        if self._viking_fs is None:
+            raise NotInitializedError("VikingFS")
+        settings = await read_account_settings(self._viking_fs, account_id)
+        return effective_auto_protect_new_content(settings)
 
     def _ensure_data_dir_lock_acquired(self) -> None:
         """Acquire the process-level data directory lock once for this service instance."""
@@ -253,11 +266,6 @@ class OpenVikingService:
     def fs(self) -> FSService:
         """Get FSService instance."""
         return self._fs_service
-
-    @property
-    def relations(self) -> RelationService:
-        """Get RelationService instance."""
-        return self._relation_service
 
     @property
     def pack(self) -> PackService:
@@ -353,6 +361,7 @@ class OpenVikingService:
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
+            acl_manager=self._vikingdb_manager.acl_manager,
             retrieval_config=config.retrieval,
             grep_config=config.grep,
             enable_recorder=enable_recorder,
@@ -407,7 +416,6 @@ class OpenVikingService:
             watch_scheduler=self._watch_scheduler,
             uri_mutation_coordinator=self._uri_mutation_coordinator,
         )
-        self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
             vector_store=self._vikingdb_manager,
@@ -497,6 +505,25 @@ class OpenVikingService:
             self._queue_manager.start()
             logger.info("QueueManager workers started")
 
+        # Preflight the MinerU endpoint when it will be used, so endpoint
+        # misconfiguration or a stopped service surfaces now instead of on the
+        # first PDF import. Required for strategy="mineru"; advisory for "auto".
+        pdf_config = self._config.pdf
+        should_preflight_mineru = pdf_config.strategy == "mineru" or (
+            pdf_config.strategy == "auto" and pdf_config.mineru_endpoint is not None
+        )
+
+        if should_preflight_mineru and pdf_config.mineru_endpoint:
+            try:
+                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                logger.info("MinerU preflight passed: %s", pdf_config.mineru_endpoint)
+            except RuntimeError as exc:
+                if pdf_config.strategy == "mineru":
+                    raise
+                logger.warning(
+                    "MinerU preflight failed (fallback will retry on first parse): %s", exc
+                )
+
         self._initialized = True
         logger.info("OpenVikingService initialized")
 
@@ -555,6 +582,7 @@ class OpenVikingService:
         mode: str = "vectors_only",
         wait: bool = True,
         dry_run: bool = False,
+        recursive: bool = True,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
         ctx: RequestContext | None = None,
@@ -564,16 +592,17 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        canonical_uri = canonicalize_uri(uri, effective_ctx)
         from openviking.service.reindex_executor import get_reindex_executor
 
         execute_kwargs = {
-            "uri": canonical_uri,
+            "uri": uri,
             "mode": mode,
             "wait": wait,
             "dry_run": dry_run,
             "ctx": effective_ctx,
         }
+        if not recursive:
+            execute_kwargs["recursive"] = False
         if tags is not None:
             execute_kwargs["tags"] = tags
             execute_kwargs["tag_mode"] = tag_mode

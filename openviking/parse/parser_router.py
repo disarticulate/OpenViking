@@ -11,6 +11,7 @@ from typing import Union
 from urllib.parse import urlparse
 
 from openviking.parse.accessors.base import LocalResource, SourceType
+from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.base import ParseResult
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.exceptions import InvalidArgumentError
@@ -80,7 +81,10 @@ class ParserRouter:
         return ext in extensions
 
     def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
-        forced = kwargs.get("parser_backend") == "understanding"
+        parser_backend = normalize_parser_backend(kwargs.get("parser_backend"))
+        if parser_backend is ParserBackend.INTERNAL:
+            return False
+        forced = parser_backend is ParserBackend.UNDERSTANDING
         return bool(
             (forced or self.should_use_understanding_api(source))
             and self._get_understanding_api().can_submit_url_directly(source, **kwargs)
@@ -103,15 +107,13 @@ class ParserRouter:
         """
         source_path = self._extract_source_path(source)
 
-        parser_backend = kwargs.pop("parser_backend", None)
-        if parser_backend not in {None, "internal", "understanding"}:
-            raise ValueError(f"Unknown parser backend: {parser_backend}")
+        parser_backend = normalize_parser_backend(kwargs.pop("parser_backend", None))
 
         normalized_feishu = (
             isinstance(source, LocalResource) and source.source_type == SourceType.FEISHU
         )
         use_understanding = not normalized_feishu and (
-            parser_backend == "understanding"
+            parser_backend is ParserBackend.UNDERSTANDING
             or (
                 parser_backend is None
                 and self.should_use_understanding_api(
@@ -123,8 +125,7 @@ class ParserRouter:
 
         if use_understanding and kwargs.get("split_content") is False:
             raise InvalidArgumentError(
-                "parse_mode='no_split' is not supported by the configured "
-                "Understanding parser."
+                "parse_mode='no_split' is not supported by the configured Understanding parser."
             )
 
         if use_understanding:
@@ -153,6 +154,11 @@ class ParserRouter:
         if not self.should_use_understanding_api(str(source_path)):
             raise ValueError("source is not routed to UnderstandingAPI")
         return await self._get_understanding_api().submit_url(str(source_path), **kwargs)
+
+    async def upload_file(self, source: Union[str, Path, LocalResource]) -> str:
+        """Upload a local source file and return only the external Files API file_id."""
+        source_path = self._extract_source_path(source)
+        return await self._get_understanding_api().upload_file(source_path)
 
     def _extract_source_path(self, source: Union[str, Path, LocalResource]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""

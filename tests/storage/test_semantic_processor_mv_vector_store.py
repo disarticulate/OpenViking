@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -8,18 +8,20 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_mv_canonicalizes_user_shorthand_before_vector_update(monkeypatch):
+async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
     ctx = RequestContext(user=UserIdentifier("acc", "default"), role=Role.ROOT)
     fs = VikingFS.__new__(VikingFS)
+    fs.acl_manager = None
     fs._async_agfs = AsyncMock()
     fs._async_agfs.stat.return_value = {"isDir": False}
+    fs._async_agfs.pathlock_acquire_batch.return_value = {"lease_ref": "lease-1"}
     fs._collect_uris = AsyncMock(return_value=[])
     fs._copy_for_mv = AsyncMock()
     fs._update_vector_store_uris = AsyncMock()
 
     await fs.mv(
-        "viking://user/peers/vaka/memories/profile.md",
-        "viking://user/memories/profile.md",
+        "viking://user/default/peers/vaka/memories/profile.md",
+        "viking://user/default/memories/profile.md",
         ctx=ctx,
     )
 
@@ -32,16 +34,34 @@ async def test_mv_canonicalizes_user_shorthand_before_vector_update(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_update_vector_store_uris_swallows_update_failure():
+async def test_vector_uri_batch_rolls_back_completed_updates():
     ctx = RequestContext(user=UserIdentifier("acc", "default"), role=Role.ROOT)
     fs = VikingFS.__new__(VikingFS)
     fs.vector_store = AsyncMock()
-    fs.vector_store.update_uri_mapping.side_effect = RuntimeError("vector unavailable")
+    fs.vector_store.update_uri_mapping.side_effect = [True, RuntimeError("failed"), True]
 
-    await fs._update_vector_store_uris(
-        ["viking://user/default/source.md"],
-        "viking://user/default/source.md",
-        "viking://user/default/target.md",
-        ctx=ctx,
-    )
-    fs.vector_store.update_uri_mapping.assert_awaited_once()
+    with pytest.raises(RuntimeError, match="failed"):
+        await fs._update_vector_store_uris(
+            ["viking://resources/old/a.md", "viking://resources/old/b.md"],
+            "viking://resources/old",
+            "viking://resources/new",
+            ctx=ctx,
+        )
+
+    assert fs.vector_store.update_uri_mapping.await_args_list == [
+        call(
+            ctx=ctx,
+            uri="viking://resources/old/a.md",
+            new_uri="viking://resources/new/a.md",
+        ),
+        call(
+            ctx=ctx,
+            uri="viking://resources/old/b.md",
+            new_uri="viking://resources/new/b.md",
+        ),
+        call(
+            ctx=ctx,
+            uri="viking://resources/new/a.md",
+            new_uri="viking://resources/old/a.md",
+        ),
+    ]

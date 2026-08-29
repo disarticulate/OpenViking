@@ -433,6 +433,40 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
+    pub async fn acl_get(&self, uri: &str) -> Result<Value> {
+        self.get("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
+    pub async fn acl_set(&self, uri: &str, entries: Vec<Value>) -> Result<Value> {
+        self.put(
+            "/api/v1/acl",
+            &serde_json::json!({"uri": uri, "entries": entries}),
+        )
+        .await
+    }
+
+    pub async fn acl_grant(&self, uri: &str, principal: &str, level: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/grant",
+            &serde_json::json!({"uri": uri, "principal": principal, "level": level}),
+        )
+        .await
+    }
+
+    pub async fn acl_revoke(&self, uri: &str, principal: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/revoke",
+            &serde_json::json!({"uri": uri, "principal": principal}),
+        )
+        .await
+    }
+
+    pub async fn acl_delete(&self, uri: &str) -> Result<Value> {
+        self.delete("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
     fn build_write_body(
         uri: &str,
         content: &str,
@@ -461,6 +495,7 @@ impl HttpClient {
         dry_run: bool,
         tags: Vec<String>,
         tag_mode: &str,
+        recursive: bool,
     ) -> Result<serde_json::Value> {
         let mut body = serde_json::json!({
             "uri": uri,
@@ -468,6 +503,9 @@ impl HttpClient {
             "wait": wait,
             "dry_run": dry_run,
         });
+        if !recursive {
+            body["recursive"] = serde_json::json!(false);
+        }
         if !tags.is_empty() {
             let obj = body
                 .as_object_mut()
@@ -638,6 +676,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        read_content: bool,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -652,6 +691,7 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "read_content": read_content.then_some(true),
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
@@ -671,6 +711,7 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        read_content: bool,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -686,6 +727,7 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
+            "read_content": read_content.then_some(true),
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -1210,12 +1252,20 @@ impl HttpClient {
     // ============ Task Methods ============
 
     pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/tasks/{}", task_id);
+        let path = if task_id.starts_with("cmp_") {
+            format!("/bot/v1/compile/{task_id}")
+        } else {
+            format!("/api/v1/tasks/{task_id}")
+        };
         self.get(&path, &[]).await
     }
 
     pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value> {
-        let path = format!("/api/v1/tasks/{}/cancel", task_id);
+        let path = if task_id.starts_with("cmp_") {
+            format!("/bot/v1/compile/{task_id}/cancel")
+        } else {
+            format!("/api/v1/tasks/{task_id}/cancel")
+        };
         self.post(&path, &serde_json::json!({})).await
     }
 
@@ -1232,35 +1282,6 @@ impl HttpClient {
             params.push(("status".to_string(), s.to_string()));
         }
         self.get("/api/v1/tasks", &params).await
-    }
-
-    // ============ Relation Methods ============
-
-    pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
-        self.get("/api/v1/relations", &params).await
-    }
-
-    pub async fn link(
-        &self,
-        from_uri: &str,
-        to_uris: &[String],
-        reason: &str,
-    ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uris": to_uris,
-            "reason": reason,
-        });
-        self.post("/api/v1/relations/link", &body).await
-    }
-
-    pub async fn unlink(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "from_uri": from_uri,
-            "to_uri": to_uri,
-        });
-        self.delete_with_body("/api/v1/relations/link", &body).await
     }
 
     // ============ Pack Methods ============
@@ -1433,13 +1454,44 @@ impl HttpClient {
             .await
     }
 
-    pub async fn admin_list_accounts(&self) -> Result<Value> {
-        self.get("/api/v1/admin/accounts", &[]).await
+    pub async fn admin_list_accounts(
+        &self,
+        name: Option<String>,
+        limit: Option<u32>,
+        page: u32,
+    ) -> Result<Value> {
+        let mut params = vec![];
+        if let Some(n) = name {
+            params.push(("name".to_string(), n));
+        }
+        if let Some(l) = limit {
+            params.push(("limit".to_string(), l.to_string()));
+            params.push(("page".to_string(), page.to_string()));
+        }
+        self.get("/api/v1/admin/accounts", &params).await
     }
 
     pub async fn admin_delete_account(&self, account_id: &str) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}", account_id);
         self.delete(&path, &[]).await
+    }
+
+    pub async fn admin_set_account_auto_protect_new_content(
+        &self,
+        account_id: &str,
+        enabled: bool,
+    ) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/settings", account_id);
+        self.patch(
+            &path,
+            &serde_json::json!({
+                "resource_acl": {
+                    "auto_protect_new_content": enabled,
+                }
+            }),
+            &[],
+        )
+        .await
     }
 
     pub async fn admin_register_user(
@@ -1466,12 +1518,17 @@ impl HttpClient {
     pub async fn admin_list_users(
         &self,
         account_id: &str,
-        limit: u32,
+        limit: Option<u32>,
         name: Option<String>,
         role: Option<String>,
+        page: u32,
     ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
-        let mut params = vec![("limit".to_string(), limit.to_string())];
+        let mut params = vec![];
+        if let Some(l) = limit {
+            params.push(("limit".to_string(), l.to_string()));
+            params.push(("page".to_string(), page.to_string()));
+        }
         if let Some(n) = name {
             params.push(("name".to_string(), n));
         }
@@ -1515,6 +1572,60 @@ impl HttpClient {
             None => serde_json::json!({}),
         };
         self.post(&path, &body).await
+    }
+
+    pub async fn admin_create_group(&self, account_id: &str, group_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups", account_id);
+        self.post(&path, &serde_json::json!({"group_id": group_id}))
+            .await
+    }
+
+    pub async fn admin_list_groups(&self, account_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups", account_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn admin_delete_group(&self, account_id: &str, group_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups/{}", account_id, group_id);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn admin_list_group_members(
+        &self,
+        account_id: &str,
+        group_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
+        );
+        self.get(&path, &[]).await
+    }
+
+    pub async fn admin_add_group_member(
+        &self,
+        account_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
+            account_id, group_id, user_id
+        );
+        self.put(&path, &serde_json::json!({})).await
+    }
+
+    pub async fn admin_remove_group_member(
+        &self,
+        account_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
+            account_id, group_id, user_id
+        );
+        self.delete(&path, &[]).await
     }
 
     pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
@@ -2318,7 +2429,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_seed_payloads_are_sent() {
+    async fn task_methods_route_compile_ids_to_compile_endpoints() {
+        let (base_url, status_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .get_task("cmp_1")
+            .await
+            .expect("compile status request should succeed");
+        let status_request = status_request_rx
+            .await
+            .expect("status request should be captured");
+        assert!(status_request.starts_with("GET /bot/v1/compile/cmp_1 "));
+
+        let (base_url, cancel_request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .cancel_task("cmp_1")
+            .await
+            .expect("compile cancellation request should succeed");
+        let cancel_request = cancel_request_rx
+            .await
+            .expect("cancel request should be captured");
+        assert!(cancel_request.starts_with("POST /bot/v1/compile/cmp_1/cancel "));
+    }
+
+    #[tokio::test]
+    async fn admin_request_payloads_are_sent() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
         client
@@ -2348,6 +2484,16 @@ mod tests {
         let request = request_rx.await.expect("request should be captured");
         assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users/alice/key "));
         assert!(request.contains(r#""seed":"new-seed""#));
+
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_set_account_auto_protect_new_content("acct", true)
+            .await
+            .expect("set account settings should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/settings "));
+        assert!(request.contains(r#""resource_acl":{"auto_protect_new_content":true}"#));
     }
 
     #[test]

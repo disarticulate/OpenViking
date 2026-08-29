@@ -432,9 +432,16 @@ fn contextual_help_command(command: &str) -> Option<String> {
                 "migrate",
                 "register-user",
                 "list-users",
+                "create-group",
+                "list-groups",
+                "list-group-members",
+                "add-group-member",
+                "remove-group-member",
+                "delete-group",
                 "remove-user",
                 "set-role",
                 "regenerate-key",
+                "set-account-settings",
             ],
         )),
         "system" => Some(system_help_command(program, &tokens)),
@@ -556,9 +563,6 @@ fn is_contextual_top_level_command(command: &str) -> bool {
             | "grep"
             | "glob"
             | "add-memory"
-            | "relations"
-            | "link"
-            | "unlink"
             | "export"
             | "backup"
             | "import"

@@ -211,11 +211,8 @@ ov session commit s1 --no-event-tags
 - `snapshot log` - Walk snapshot history.
 - `snapshot ignore-get` / `snapshot ignore-set` / `snapshot ignore-delete` - Manage account `.ovgitignore`.
 
-### Relations And Privacy
+### Privacy
 
-- `relations` - List resource relations. Experimental.
-- `link` - Create relation links. Experimental.
-- `unlink` - Remove a relation link. Experimental.
 - `privacy` - Manage privacy configuration categories, targets, versions, and active config.
 
 ### Admin
@@ -230,6 +227,7 @@ Use `--sudo` for commands that require the configured `root_api_key`.
 - `admin remove-user` - Remove a user.
 - `admin set-role` - Change a user's role. ROOT only.
 - `admin regenerate-key` - Rotate a user's API key.
+- `admin set-account-settings` - Update allowlisted account settings.
 - `admin migrate` - Migrate legacy agent/session data. ROOT only.
 - `system` - Administrative system utility commands.
 - `reindex` - Rebuild semantic and vector artifacts for a URI.

@@ -363,6 +363,16 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/fs` | 删除资源 |
 | POST | `/api/v1/fs/mv` | 移动或重命名资源 |
 
+### [ACL](12-acl.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/acl` | 获取资源的直接、继承和有效 ACL |
+| PUT | `/api/v1/acl` | 替换资源的直接 ACL |
+| DELETE | `/api/v1/acl` | 清空资源的直接 ACL |
+| POST | `/api/v1/acl/grant` | 设置一个 principal 的直接权限级别 |
+| POST | `/api/v1/acl/revoke` | 删除一个 principal 的直接授权 |
+
 ### [内容](12-content.md)
 
 | 方法 | 路径 | 说明 |
@@ -411,7 +421,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
 
-### [检索](06-retrieval.md)与[关系](13-relations.md)
+### [检索](06-retrieval.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -419,10 +429,6 @@ JSON 输出 - 错误：
 | POST | `/api/v1/search/search` | 上下文感知搜索；`mode="context"` 返回可注入的组装上下文 |
 | POST | `/api/v1/search/grep` | 内容模式搜索 |
 | POST | `/api/v1/search/glob` | 文件模式匹配 |
-| GET | `/api/v1/relations` | 获取资源关系 |
-| POST | `/api/v1/relations/link` | 创建资源链接 |
-| DELETE | `/api/v1/relations/link` | 删除资源链接 |
-| POST | `/api/v1/relations/build_graph` | 构建关系图 |
 
 ### [Watch](15-watches.md)、[快照](11-snapshot.md)与 [OVPack](14-ovpack.md)
 
@@ -479,9 +485,17 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}` | 删除账号 |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 将用户提升为 ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建用户组 |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出用户组 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除用户组 |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出用户组成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 添加用户组成员 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除用户组成员 |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取生效配置 |
@@ -509,6 +523,7 @@ JSON 输出 - 错误：
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
 | POST | `/bot/v1/compile` | 启动 Skill 驱动的 Compile 任务 |
 | GET | `/bot/v1/compile/{task_id}` | 获取 Compile 任务状态 |
+| POST | `/bot/v1/compile/{task_id}/cancel` | 取消 Compile 任务 |
 
 ---
 
@@ -519,8 +534,8 @@ JSON 输出 - 错误：
 | 分组 | 适合查找的内容 |
 |------|----------------|
 | 核心数据 | 资源、内容、文件系统、技能、会话、记忆 |
-| 检索与关系 | 语义检索、代码检索、资源关系 |
+| 检索 | 语义检索、代码检索 |
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
-| 身份与治理 | 管理员、隐私配置 |
+| 身份与治理 | 管理员、ACL、隐私配置 |
 | 协议与扩展 | OpenViking Assets、WebDAV、VikingBot API |

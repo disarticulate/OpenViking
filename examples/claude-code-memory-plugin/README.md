@@ -2,6 +2,10 @@
 
 Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens automatically after every turn — no MCP tool calls required from the model.
 
+> **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
+> caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
+> `viking://user/memories` shorthand is rejected by newer servers.
+
 > Installable straight from the repo's marketplace catalog — no separate distribution repo. See [Manual setup](#manual-setup) for the two-command remote install.
 
 ## Quick Start
@@ -270,7 +274,7 @@ The plugin renders a one-line status of OpenViking under your Claude Code input 
 Examples:
 
 ```text
-OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   6 memories injected; model + context usage
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          6 memories injected; model + context usage
 OV ⚠ slow                                  probe missed the 1 s budget (server may be lagging)
 OV ✗ offline                               server unreachable
 OV ⚡ bypass │ Fable 5 · ctx 42%            OPENVIKING_BYPASS_SESSION* matched
@@ -304,6 +308,14 @@ Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook
 - For deep diagnosis, run the standalone scripts `scripts/debug-recall.mjs` and `scripts/debug-capture.mjs` against a sample input rather than leaving the hook log on permanently.
 
 ## Troubleshooting
+
+Start with the bundled doctor — it checks the install (marketplace, enablement, hooks, MCP wiring), the resolved config (which file won, API key shown masked), the connection (reachability, auth, `/mcp`) and recent hook activity, and prints a fix for every finding:
+
+```bash
+node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/ov-memory-doctor.mjs"
+```
+
+Or just ask Claude to check the plugin: the `ov-memory-doctor` skill runs the same script and walks the report. When the server runs on the same machine (loopback url) the report adds a Server health section — whether anything listens on the port, plugin-only keys in ov.conf that stop the server from starting, and `GET /ready`; everything else server-side (config validation, live embedding probe, native engine, disk) stays with `openviking-server doctor`.
 
 | Symptom                                    | Cause                                                        | Fix                                                                                                |
 |--------------------------------------------|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
@@ -357,7 +369,7 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
 
 There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint.
 
-A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<sha256(cc_session_id)>`, so resume / compact / multi-hook events all target the same session, and OV's `auto_commit_threshold` drives archival + memory extraction naturally.
+A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 20000), and `PreCompact` / `SessionEnd` / `SubagentStop` commit unconditionally.
 
 ### Hook responsibilities
 
@@ -370,6 +382,8 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
+| `PreToolUse`          | Native `Read` / `Glob` / `Grep` on a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool                  |
+| `PostToolUse`         | `Read` of a `SKILL.md` file              | Optional (default off): inject an experience block when OV has relevant skill-experience memories |
 
 ### Async write path
 
@@ -394,7 +408,13 @@ claude-code-memory-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
-│   └── hooks.json           # 7 hook registrations
+│   └── hooks.json           # 9 hook registrations
+├── commands/
+│   └── ov.md                # /ov status command
+├── skills/
+│   ├── openviking-memory/   # how to use the memory tools
+│   ├── ov-experience-memory/
+│   └── ov-memory-doctor/    # install / config / connection / local-server troubleshooting
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp bridge
 ├── scripts/
@@ -409,6 +429,8 @@ claude-code-memory-plugin/
 │   ├── subagent-stop.mjs    # SubagentStop
 │   ├── debug-recall.mjs     # standalone diagnostic for recall
 │   ├── debug-capture.mjs    # standalone diagnostic for capture
+│   ├── ov-status.mjs        # /ov status report
+│   ├── ov-memory-doctor.mjs # diagnostics script (ov-memory-doctor skill)
 │   └── lib/
 │       ├── ov-session.mjs   # OV HTTP client + session helpers + bypass check
 │       └── async-writer.mjs # detached-worker helper for write-path hooks

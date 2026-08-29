@@ -2,6 +2,10 @@
 
 This package provides a ZCode lifecycle adapter for OpenViking long-term memory. It reuses the shared `memory-plugin-shared` runtime — no memory logic is duplicated. Only a thin ZCode adapter is new.
 
+> **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
+> caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
+> `viking://user/memories` shorthand is rejected by newer servers.
+
 ## What it does
 
 - **SessionStart** — injects user profile and preferences/entities into context.
@@ -10,6 +14,8 @@ This package provides a ZCode lifecycle adapter for OpenViking long-term memory.
 - **Stop** — returns immediately, then captures incremental user/assistant turns and commits the OpenViking session in a detached worker.
 
 ZCode does not support `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`, so the commit-on-`Stop` strategy compensates for the absence of compact/end-of-session signals. The rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and allow a later Stop to recover missed turns. Hook stdin is only a fallback when the rollout file is unavailable.
+
+> Invariant: hook groups must OMIT the matcher key rather than writing `"matcher": ""`. Strict parsers treat an empty string as invalid and may silently drop the entire configuration source.
 
 ## Install
 

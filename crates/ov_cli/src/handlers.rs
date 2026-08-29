@@ -341,34 +341,6 @@ pub async fn handle_add_skill(
     .await
 }
 
-pub async fn handle_relations(uri: String, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::list_relations(&client, &uri, ctx.output_format, ctx.compact).await
-}
-
-pub async fn handle_link(
-    from_uri: String,
-    to_uris: Vec<String>,
-    reason: String,
-    ctx: CliContext,
-) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::link(
-        &client,
-        &from_uri,
-        &to_uris,
-        &reason,
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
-}
-
-pub async fn handle_unlink(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::relations::unlink(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
-}
-
 pub async fn handle_export(
     uri: String,
     to: String,
@@ -651,8 +623,9 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::ListAccounts => {
-            commands::admin::list_accounts(&client, ctx.output_format, ctx.compact).await
+        AdminCommands::ListAccounts { name, limit, page } => {
+            commands::admin::list_accounts(&client, name, limit, page, ctx.output_format, ctx.compact)
+                .await
         }
         AdminCommands::DeleteAccount { account_id } => {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
@@ -685,6 +658,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             limit,
             name,
             role,
+            page,
         } => {
             commands::admin::list_users(
                 &client,
@@ -692,6 +666,79 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 limit,
                 name,
                 role,
+                page,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::CreateGroup {
+            account_id,
+            group_id,
+        } => {
+            commands::admin::create_group(
+                &client,
+                &account_id,
+                &group_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::ListGroups { account_id } => {
+            commands::admin::list_groups(&client, &account_id, ctx.output_format, ctx.compact).await
+        }
+        AdminCommands::ListGroupMembers {
+            account_id,
+            group_id,
+        } => {
+            commands::admin::list_group_members(
+                &client,
+                &account_id,
+                &group_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::AddGroupMember {
+            account_id,
+            group_id,
+            user_id,
+        } => {
+            commands::admin::add_group_member(
+                &client,
+                &account_id,
+                &group_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::RemoveGroupMember {
+            account_id,
+            group_id,
+            user_id,
+        } => {
+            commands::admin::remove_group_member(
+                &client,
+                &account_id,
+                &group_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::DeleteGroup {
+            account_id,
+            group_id,
+        } => {
+            commands::admin::delete_group(
+                &client,
+                &account_id,
+                &group_id,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -735,6 +782,19 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 seed.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::SetAccountSettings {
+            account_id,
+            auto_protect_new_content,
+        } => {
+            commands::admin::set_account_settings(
+                &client,
+                &account_id,
+                auto_protect_new_content,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -1386,6 +1446,7 @@ pub async fn handle_reindex(
     dry_run: bool,
     tags: Vec<String>,
     tag_mode: String,
+    recursive: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1397,6 +1458,7 @@ pub async fn handle_reindex(
         dry_run,
         tags,
         &tag_mode,
+        recursive,
         ctx.output_format,
         ctx.compact,
     )
@@ -1419,6 +1481,7 @@ pub async fn handle_find(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
+    read_content: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1450,6 +1513,9 @@ pub async fn handle_find(
     if let Some(ref t) = tags {
         params.push(format!("--tags {}", t.join(",")));
     }
+    if read_content {
+        params.push("--read-content".to_string());
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1466,6 +1532,7 @@ pub async fn handle_find(
         level,
         context_type,
         tags,
+        read_content,
         ctx.output_format,
         ctx.compact,
     )
@@ -1484,6 +1551,7 @@ pub async fn handle_search(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
+    read_content: bool,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1518,6 +1586,9 @@ pub async fn handle_search(
     if let Some(ref t) = tags {
         params.push(format!("--tags {}", t.join(",")));
     }
+    if read_content {
+        params.push("--read-content".to_string());
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1535,6 +1606,7 @@ pub async fn handle_search(
         level,
         context_type,
         tags,
+        read_content,
         ctx.output_format,
         ctx.compact,
     )
@@ -1690,6 +1762,39 @@ pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> 
         ctx.compact,
     )
     .await
+}
+
+pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match action {
+        crate::AclCommands::Get { uri } => {
+            commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Set { uri, entries } => {
+            commands::acl::set(&client, &uri, entries, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Grant {
+            uri,
+            principal,
+            level,
+        } => {
+            commands::acl::grant(
+                &client,
+                &uri,
+                &principal,
+                &level,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        crate::AclCommands::Revoke { uri, principal } => {
+            commands::acl::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Rm { uri } => {
+            commands::acl::remove(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+    }
 }
 
 pub async fn handle_grep(

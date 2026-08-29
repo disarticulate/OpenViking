@@ -264,7 +264,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 示例：
 
 ```text
-OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   注入 6 条记忆；模型 + 上下文占比
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          注入 6 条记忆；模型 + 上下文占比
 OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
 OV ✗ offline                               服务器不可达
 OV ⚡ bypass │ Fable 5 · ctx 42%            命中 OPENVIKING_BYPASS_SESSION*
@@ -298,6 +298,14 @@ OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；
 - 深度排查请用 `scripts/debug-recall.mjs` / `scripts/debug-capture.mjs` 单跑示例输入，不要长期开 hook 日志
 
 ## 故障排除
+
+先跑内置的体检脚本——它会检查安装（marketplace、启用状态、hooks、MCP 接线）、解析后的配置（哪个文件生效、API key 脱敏展示）、连接（可达性、鉴权、`/mcp`）和最近的 hook 活动，并给每个问题附上修复建议：
+
+```bash
+node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/ov-memory-doctor.mjs"
+```
+
+也可以直接让 Claude 检查插件：`ov-memory-doctor` skill 会运行同一个脚本并解读报告。当 server 与插件在同一台机器上（loopback url）时，报告还会多一节 Server health：端口上是否有 server 在监听、ov.conf 里只有插件会读而 server 会拒绝启动的键、以及 `GET /ready`；其余 server 端检查（配置校验、实际 embedding 探测、native engine、磁盘）仍由 `openviking-server doctor` 负责。
 
 | 症状                                         | 原因                                                  | 解决方案                                                                                       |
 |----------------------------------------------|------------------------------------------------------|-----------------------------------------------------------------------------------------------|
@@ -351,7 +359,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 没有 TypeScript 编译步骤，也没有运行时 npm 引导。Hook 都是直接走 HTTP 调 OpenViking 的 `.mjs` 文件；MCP 使用 `servers/mcp-proxy.mjs` 作为零依赖 stdio 桥接，转发到 OpenViking 服务器自身的 `/mcp` endpoint。
 
-首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<sha256(cc_session_id)>`，所以 resume / compact / 多 hook 事件都打到同一个 session，OV 的 `auto_commit_threshold` 自然驱动归档与记忆抽取。
+首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<cc_session_id>`（CC session_id 原样保留，不做哈希），所以 resume / compact / 多 hook 事件都打到同一个 session。归档与记忆抽取由客户端触发：`Stop` hook 在服务端报告的 pending tokens 超过 `commitTokenThreshold`（默认 20000）时 commit，`PreCompact` / `SessionEnd` / `SubagentStop` 则无条件 commit。
 
 ### 各 hook 职责
 
@@ -364,6 +372,8 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
+| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` 指向 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具                              |
+| `PostToolUse`         | `Read` 读到 `SKILL.md` 文件           | 可选（默认关闭）：OV 有相关 skill 经验记忆时注入经验块                                           |
 
 ### 异步写路径
 
@@ -388,7 +398,13 @@ claude-code-memory-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
-│   └── hooks.json           # 7 个 hook 注册
+│   └── hooks.json           # 9 个 hook 注册
+├── commands/
+│   └── ov.md                # /ov 状态命令
+├── skills/
+│   ├── openviking-memory/   # 记忆工具使用指南
+│   ├── ov-experience-memory/
+│   └── ov-memory-doctor/    # 安装 / 配置 / 连接 / 本机 server 排障
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp 桥接
 ├── scripts/
@@ -403,6 +419,8 @@ claude-code-memory-plugin/
 │   ├── subagent-stop.mjs    # SubagentStop
 │   ├── debug-recall.mjs     # 召回独立诊断
 │   ├── debug-capture.mjs    # 捕获独立诊断
+│   ├── ov-status.mjs        # /ov 状态报告
+│   ├── ov-memory-doctor.mjs # 体检脚本（ov-memory-doctor skill）
 │   └── lib/
 │       ├── ov-session.mjs   # OV HTTP 客户端 + session 帮助 + bypass 检查
 │       └── async-writer.mjs # 写路径 detach-worker 帮助
