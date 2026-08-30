@@ -142,6 +142,20 @@ def _is_svg(data: bytes) -> bool:
     return data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100])
 
 
+def _is_text_data(data: bytes) -> bool:
+    """Check if the data is plain text (SVG/XML markup) rather than a raster image.
+
+    Raster formats are binary with control bytes; SVG/XML is UTF-8 text and
+    cannot be decoded by VLM image pipelines.
+    """
+    head = data[:4096]
+    if not head:
+        return False
+    if any(byte < 9 or (13 < byte < 32) or byte == 127 for byte in head):
+        return False
+    return head.lstrip().lstrip(b"\xef\xbb\xbf").startswith(b"<")
+
+
 def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
     """Convert SVG to PNG using cairosvg or wand.
 
@@ -275,9 +289,8 @@ async def generate_image_summary(
         if not isinstance(image_bytes, bytes):
             raise ValueError(f"Expected bytes for image file, got {type(image_bytes)}")
 
-        # Check for unsupported formats (SVG, etc.) by detecting magic bytes
-        # SVG format is not supported by VolcEngine VLM API, skip VLM analysis
-        if _is_svg(image_bytes):
+        # Text markup (SVG/XML) cannot be decoded by VLM image pipelines
+        if _is_svg(image_bytes) or _is_text_data(image_bytes):
             logger.info(
                 f"[MediaUtils.generate_image_summary] SVG format detected, skipping VLM analysis: {image_uri}"
             )
