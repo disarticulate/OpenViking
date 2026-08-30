@@ -755,7 +755,8 @@ async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
     msg = queue.items[0]
     assert msg.message[0] == {"type": "text", "text": "a cat on a sofa"}
     assert msg.message[1]["type"] == "image_url"
-    assert msg.message[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    # MIME is labeled from content, not the (mislabeled) .png extension
+    assert msg.message[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert "content" not in msg.context_data
     assert fs.read_file_bytes_calls == 1
 

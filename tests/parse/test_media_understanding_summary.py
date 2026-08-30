@@ -112,6 +112,9 @@ class _ImageVLM:
     def __init__(self):
         self.images = []
 
+    def is_image_mime_blacklisted(self, mime):
+        return False
+
     async def get_vision_completion_async(self, *, prompt, images):
         self.images = images
         return "image summary"

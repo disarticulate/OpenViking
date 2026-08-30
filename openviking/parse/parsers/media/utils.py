@@ -12,7 +12,7 @@ from openviking.core.path_variables import CalendarVariableProvider
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.image_search import prepare_image_bytes_for_model
+from openviking.utils.image_search import detect_image_mime, prepare_image_bytes_for_model
 from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -295,6 +295,16 @@ async def generate_image_summary(
                 f"[MediaUtils.generate_image_summary] SVG format detected, skipping VLM analysis: {image_uri}"
             )
             return {"name": file_name, "summary": "SVG image (format not supported by VLM)"}
+
+        # Formats the endpoint already rejected at runtime are skipped
+        # without another VLM round-trip.
+        image_mime = detect_image_mime(image_bytes)
+        if image_mime and vlm.is_image_mime_blacklisted(image_mime):
+            logger.info(
+                f"[MediaUtils.generate_image_summary] {image_mime} rejected by VLM endpoint, "
+                f"skipping: {image_uri}"
+            )
+            return {"name": file_name, "summary": f"Image format {image_mime} not supported by VLM"}
 
         logger.info(
             f"[MediaUtils.generate_image_summary] Generating summary for image: {image_uri}"
